@@ -116,6 +116,58 @@ Al finalizar todas las pruebas, se elimina el archivo grande para liberar el esp
 
 ## Paso a paso
 
+### Arranque
+
+1. Python lee las constantes y define todas las funciones. Todavía no ejecuta nada.
+2. Llega a la última línea, `if __name__ == "__main__": main()`, y llama a `main()`.
+3. `main()` ejecuta primero `demo_basico()` y después `benchmark()`.
+
+### Parte 1: `demo_basico()`
+
+1. **Crear el archivo pequeño.** Se escribe `pequeno.txt` con la frase "Hola mundo desde un archivo mapeado a memoria".
+2. **Abrirlo con mmap.** Se abre en modo lectura y escritura, y se mapea completo (`mmap.mmap(f.fileno(), 0)`). Desde aquí el archivo se usa como una lista de bytes.
+3. **Consultarlo.** Se imprime:
+   - el tamaño (45 bytes);
+   - el primer byte (`mm[0]`, un número);
+   - las primeras 4 posiciones (`mm[0:4]`, es decir `Hola`);
+   - la posición de la palabra "mundo" (`mm.find`).
+4. **Modificarlo.** Se escribe `mm[0:4] = b"HOLA"`, y la frase pasa de "Hola" a "HOLA" directo en memoria.
+5. **Guardar y cerrar.** `mm.flush()` manda el cambio al disco y `mm.close()` cierra el mapeo.
+6. **Comprobar.** Se abre el archivo de la forma normal con `read()` y se imprime. Debe verse "HOLA mundo...", lo que demuestra que el cambio sí quedó en el archivo.
+7. **Limpiar.** Se borra `pequeno.txt`.
+
+### Parte 2: `benchmark()`
+
+**Preparación**
+
+1. **Crear el archivo grande** (`crear_archivo()`):
+   - Se calcula cuántas líneas hacen falta para llegar a 256 MB.
+   - Se escribe cada línea ("Linea 000000000...", "Linea 000000001...") rellenada hasta medir 64 caracteres.
+   - Es el paso que más tarda, porque escribe 256 MB.
+2. **Saltar a una línea** (`acceso_directo()`):
+   - Se abre el archivo grande con mmap.
+   - Se calcula dónde empieza la línea 1,000,000 (1,000,000 × 64).
+   - Se imprime esa línea sin haber leído las anteriores.
+3. **Elegir lugares al azar.**
+   - Se eligen 50,000 posiciones aleatorias, todas múltiplos de 4096.
+   - La lista se arma una sola vez. Así los dos métodos leen exactamente los mismos lugares.
+
+**Las pruebas**
+
+Cada prueba se hace con `medir()`, que anota la hora antes y después, y se repite 3 veces. En cada repetición pasa lo siguiente:
+
+1. **Lectura secuencial normal.** Se abre el archivo y se leen pedazos de 4 KB hasta llegar al final.
+2. **Lectura secuencial con mmap.** Se mapea el archivo y se toman pedazos de 4 KB uno tras otro hasta el final.
+3. **Lectura aleatoria normal.** Para cada una de las 50,000 posiciones se salta ahí y se lee un pedazo.
+4. **Lectura aleatoria con mmap.** Para cada una de las 50,000 posiciones se toma directamente el pedazo del archivo mapeado.
+
+**Resultados**
+
+1. Se imprime una tabla con una fila por prueba y tres tiempos (1ª, 2ª y 3ª vez), en segundos.
+2. La 1ª vez puede ser más lenta porque el sistema operativo aún no tiene el archivo en su memoria rápida (la caché). Las siguientes suelen ser más rápidas.
+3. Se borra el archivo grande.
+
+
 ## Conclusiones
 
 ## Referencias
