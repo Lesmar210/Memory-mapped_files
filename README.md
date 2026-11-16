@@ -1,7 +1,7 @@
 # Memory-mapped_files
 ## Integrantes
 - 323270258 - Aguilar Sánchez Carla Alexandra 
-- N.Cuenta - Nombre
+- 323214478 - Ramriez Olvera Erick Yael
 - N.Cuenta - Nombre
 - 323274177 - Zacarias Guadalupe Leslie Marlene
   
@@ -26,6 +26,100 @@ mmap es el puente directo entre estos tres componentes de la arquitectura del si
 - Utiliza el sistema de archivos para localizar el archivo físico en disco y sus bloques correspondientes.
 - Se apoya en el subsistema de memoria virtual para otorgarle al proceso un rango de direcciones y manejar la traducción de direcciones lógicas a físicas.
 - Permite que el almacenamiento persistente (disco) y la memoria volátil (RAM) se entrelacen mediante la abstracción de bloques de datos.
+
+## Mecánica del SO: páginas, page faults y espacio de direcciones
+
+### Espacio de direcciones virtual
+
+Cada proceso ve su propio espacio de direcciones virtual, un rango de direcciones contiguas que no corresponde directamente a la RAM física. El sistema operativo, apoyado en el hardware (la MMU), traduce cada dirección virtual a una dirección física cuando el proceso accede a ella. Ese espacio se divide en regiones: código, datos, heap, pila, bibliotecas compartidas y **regiones mapeadas a archivos**.
+
+Cuando llamamos a `mmap`, el kernel **no lee el archivo en ese momento**. Solo reserva un rango de direcciones virtuales nuevo en el proceso y anota que ese rango está respaldado por un archivo (en Linux, una estructura llamada VMA). El contenido llega a la RAM después, bajo demanda.
+
+### Páginas y tabla de páginas
+
+- La memoria virtual y la física se dividen en bloques de tamaño fijo llamados **páginas** (normalmente **4 KB = 4096 bytes**). En la memoria física a esos bloques se les llama *marcos* (frames).
+- La **tabla de páginas** de cada proceso indica, para cada página virtual, en qué marco físico está y con qué permisos (lectura, escritura), o si todavía no está en memoria.
+- El **TLB** es una caché pequeña dentro del procesador que guarda traducciones recientes para no consultar la tabla de páginas en cada acceso.
+- La **caché de páginas** (page cache) es la memoria que el kernel usa para guardar bloques de archivos ya leídos. Tanto `read()` como `mmap` pasan por ella.
+
+En nuestra demo, el archivo de 256 MB equivale a 256 × 1024 / 4 = **65,536 páginas**. Como `BLOQUE = 4096`, cada lectura de la prueba corresponde a exactamente una página, y las posiciones aleatorias son múltiplos de 4096, es decir, están alineadas a página.
+
+### Page fault (fallo de página)
+
+Un page fault ocurre cuando el proceso accede a una dirección virtual cuya página no tiene una traducción válida en la tabla de páginas. **No es un error**: es el mecanismo normal con el que funciona el mapeo bajo demanda. La CPU lanza una excepción y el kernel la atiende.
+
+Flujo de un acceso con `mmap`:
+
+1. El proceso hace `mm[pos:pos + BLOQUE]`, lo que accede a una dirección virtual dentro de la región mapeada.
+2. La MMU consulta TLB y tabla de páginas. Si la página no está presente, se produce un **page fault** y el control pasa al kernel.
+3. El kernel verifica que la dirección pertenezca a una región mapeada y que el acceso tenga permiso.
+4. Busca la página del archivo en la caché de páginas:
+   - **Fallo menor (minor fault):** la página ya está en la caché de páginas (por ejemplo, porque otra lectura la trajo antes). Solo hay que actualizar la tabla de páginas. Es rápido (del orden de microsegundos o menos).
+   - **Fallo mayor (major fault):** la página no está en RAM. El kernel debe leerla del disco, esperar la E/S y luego enlazarla. Es mucho más lento (del orden de milisegundos en un disco, menos en SSD).
+5. El kernel actualiza la tabla de páginas y reanuda la instrucción que falló. Para el proceso, el acceso simplemente funcionó.
+
+Esto explica el comportamiento de las **tres repeticiones** de la prueba. En la 1ª vez, el archivo probablemente no está en la caché de páginas, así que hay fallos mayores. En la 2ª y 3ª vez, ya está en RAM y los accesos son mucho más baratos. Hay que tener en cuenta que `crear_archivo()` acaba de escribir el archivo, por lo que parte de él puede estar ya en caché incluso en la 1ª vez.
+
+### Qué pasa con `read()`
+
+1. El proceso llama `read()`, que es una **llamada al sistema**: cambia de modo usuario a modo kernel.
+2. El kernel busca los bytes en la caché de páginas. Si no están, los lee del disco.
+3. El kernel **copia** los datos de la caché de páginas al búfer del proceso (copia kernel → usuario).
+4. Regresa a modo usuario.
+
+Cada `read()` implica un cambio de modo y una copia. Con `mmap` no hay llamada al sistema por cada acceso, pero sí puede haber un page fault la primera vez que se toca cada página.
+
+### Otros detalles relevantes
+
+- **Lectura anticipada (readahead):** ante un patrón secuencial, el kernel lee páginas por adelantado. Esto favorece a ambos métodos en acceso secuencial y casi no ayuda en acceso aleatorio.
+- **Escrituras y `flush()`:** al modificar una región mapeada, la página queda marcada como "sucia" y el kernel la escribe a disco más tarde. `mm.flush()` (que usa `msync`) fuerza esa sincronización. Por eso en `demo_basico()` se llama a `flush()` antes de cerrar.
+- **Modo de acceso:** `ACCESS_READ` solo permite leer (intentar escribir produce un error). En `demo_basico()` se usa el modo por defecto, que permite lectura y escritura y refleja los cambios en el archivo.
+- **Una limitación de Python:** una rebanada `mm[i:i + BLOQUE]` devuelve un objeto `bytes` nuevo, es decir, **hace una copia** hacia el heap del intérprete. Así, la ventaja de "cero copias" de `mmap` se reduce en esta demo. Con `memoryview(mm)[i:i + BLOQUE]` se evitaría esa copia. Esto conviene tenerlo presente al interpretar los tiempos.
+- **Windows:** el concepto es el mismo, pero internamente se usan `CreateFileMapping` y `MapViewOfFile` en lugar de `mmap(2)`.
+
+## Comparativa: `mmap` vs `read()`
+
+| Criterio | `mmap` | `read()` |
+|---|---|---|
+| Mecanismo | Mapea el archivo al espacio de direcciones; la carga ocurre mediante page faults | Llamada al sistema que copia datos al búfer del usuario |
+| Costo por acceso | Sin syscall por acceso; costo de page fault la primera vez que se toca una página | Una syscall (cambio de modo) por cada `read()` |
+| Copias de datos | Accede a la caché de páginas sin copia intermedia (en Python, la rebanada sí copia) | Siempre copia de la caché del kernel al búfer del usuario |
+| Acceso secuencial | Bueno, aprovecha readahead; muchos page faults menores | Muy bueno, readahead y pocas syscalls con bloques grandes |
+| Acceso aleatorio | Muy bueno: basta con calcular la dirección, sin `seek` | Peor: requiere `seek()` + `read()` por cada acceso |
+| Modelo de programación | El archivo se usa como arreglo de bytes (índices, rebanadas, `find`) | Flujo de bytes con posición actual |
+| Archivos pequeños | Poco conveniente: el costo de crear y destruir el mapeo no se compensa | Más simple y eficiente |
+| Archivos muy grandes | Útil: no hace falta cargar todo, solo se traen las páginas tocadas (limitado por el espacio de direcciones, sobre todo en 32 bits) | Útil si se lee por bloques |
+| Latencia | Impredecible: cualquier acceso a memoria puede bloquearse por un fallo mayor | Más predecible: el bloqueo ocurre en la llamada a `read()` |
+| Manejo de errores | Errores de E/S o archivo truncado se manifiestan como señales/excepciones al acceder a memoria (p. ej. `SIGBUS`) | Se reportan como valor de retorno o excepción en `read()` |
+| Cambiar el tamaño del archivo | Complicado (hay que remapear) | Natural (`write`, `truncate`) |
+| Compartir entre procesos | Varios procesos pueden mapear el mismo archivo y compartir las mismas páginas físicas | Cada proceso tiene su propia copia en su búfer |
+
+### Criterios: cuándo conviene `mmap` y cuándo `read()`
+
+**Conviene `mmap` cuando:**
+
+1. Hay **muchos accesos aleatorios** a un archivo grande (bases de datos, índices, búsquedas).
+2. El mismo archivo se **lee repetidamente** o por varios procesos, y se quiere aprovechar la caché y compartir páginas.
+3. Se quiere un código más simple, tratando el archivo como un arreglo (`mm[a:b]`, `mm.find(...)`).
+4. Se necesita compartir memoria entre procesos a través de un archivo.
+5. El archivo cabe razonablemente en el espacio de direcciones del proceso.
+
+**Conviene `read()` cuando:**
+
+1. La lectura es **secuencial, de una sola pasada** (el readahead ya la hace eficiente y no hace falta el mapeo).
+2. El archivo es **pequeño** o se lee una sola vez.
+3. Se necesita **latencia predecible** o manejar errores de E/S de forma controlada.
+4. El archivo **cambia de tamaño** durante el uso o se está escribiendo de forma incremental (logs, flujos).
+5. El archivo no es regular, como una tubería (pipe), un socket o la entrada estándar: no se pueden mapear.
+
+### Hipótesis a contrastar con el benchmark
+
+Estas son las expectativas teóricas que el Integrante 4 puede verificar con la tabla de tiempos de `demo_mmap.py`:
+
+- **Secuencial:** `read()` y `mmap` deberían dar tiempos similares. `read()` puede salir ligeramente mejor porque hace pocas syscalls y aprovecha bien el readahead.
+- **Aleatorio:** `mmap` debería ser más rápido que `read()` en la 2ª y 3ª repetición, porque evita una syscall y un `seek` por cada una de las 50,000 lecturas.
+- **Caché:** la 1ª repetición debería ser la más lenta en las pruebas que lean el archivo desde disco. Las siguientes deberían bajar y estabilizarse.
+- Si los resultados no coinciden con estas hipótesis, hay que explicarlo (por ejemplo, por el efecto de la caché de Windows/Linux, por la copia que hace la rebanada de Python o por el búfer interno de `open()`).
 
 ## Demo
 
