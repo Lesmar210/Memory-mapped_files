@@ -1,41 +1,12 @@
-import mmap
+﻿import mmap
 import os
 import random
 import time
 
-TAM_MB = 256          # tamano del archivo grande
+from archivo import ARCHIVO, crear_archivo
+
 BLOQUE = 4096         # bytes que se leen cada vez
 LECTURAS = 50000
-ARCHIVO = "archivo_grande.txt"
-
-
-def demo_basico():
-    print("PARTE 1: mmap como arreglo de bytes")
-
-    with open("pequeno.txt", "wb") as f:
-        f.write(b"Hola mundo desde un archivo mapeado a memoria")
-
-    with open("pequeno.txt", "r+b") as f:
-        mm = mmap.mmap(f.fileno(), 0)
-        print("Tamano:", len(mm), "bytes")
-        print("mm[0]:", mm[0]) 
-        print("mm[0:4]:", mm[0:4]) 
-        print("find 'mundo':", mm.find(b"mundo"))
-        mm[0:4] = b"HOLA"  
-        mm.flush()
-        mm.close()
-
-    with open("pequeno.txt", "rb") as f:
-        print("Leido con read():", f.read())
-    os.remove("pequeno.txt")
-
-
-def crear_archivo():
-    print("\nCreando archivo de", TAM_MB, "MB...")
-    n_lineas = TAM_MB * 1024 * 1024 // 64
-    with open(ARCHIVO, "w", newline="\n") as f:
-        for i in range(n_lineas):
-            f.write(f"Linea {i:09d}: el SO mapea este archivo".ljust(63) + "\n")
 
 
 def acceso_directo():
@@ -105,12 +76,3 @@ def benchmark():
         print(f"{nombre}   {t[0]:.4f}   {t[1]:.4f}   {t[2]:.4f}")
 
     os.remove(ARCHIVO)
-
-
-def main():
-    demo_basico()
-    benchmark()
-
-
-if __name__ == "__main__":
-    main()
