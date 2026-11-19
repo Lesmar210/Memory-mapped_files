@@ -123,88 +123,95 @@ Estas son las expectativas teóricas que el Integrante 4 puede verificar con la 
 
 ## Demo
 
-El programa se encuentra en un solo archivo de Python llamado `demo_mmap.py` y utiliza únicamente módulos de la biblioteca estándar: `mmap`, `os`, `random` y `time`. Su estructura está dividida en varias funciones para facilitar su comprensión y ejecución. La función principal, `main()`, se encarga de ejecutar dos partes: `demo_basico()` y `benchmark()`.
+El programa se encuentra dividido en cuatro archivos de Python y utiliza únicamente módulos de la biblioteca estándar: `mmap`, `os`, `random`, `resource`, `tempfile`, `time`, `zlib` y `argparse`.
 
-Al inicio del programa se definen algunas constantes que permiten establecer los parámetros de las pruebas:
+1. `main.py`: punto de entrada. Ejecuta en orden `mmap_como_arreglo()`, `crear_archivo()`, `page_faults()` y `benchmark()`.
+2. `archivo.py`: constantes, creación del archivo grande, vaciado de caché, conteo de fallos de página e información del archivo (inodo y bloques).
+3. `demo_basico.py`: contiene `mmap_como_arreglo()` y `page_faults()`.
+4. `benchmark.py`: las cuatro funciones de lectura, la medición de tiempos y fallos, y las tablas de resultados.
 
-1. `TAM_MB = 256`: establece el tamaño del archivo grande en megabytes.
-2. `BLOQUE = 4096`: define el tamaño de los bloques que se leen en cada operación, equivalente a 4 KB.
-3. `LECTURAS = 50000`: indica la cantidad de lecturas que se realizan durante las pruebas de acceso aleatorio.
-4. `ARCHIVO = "archivo_grande.txt"`: especifica el nombre del archivo que se utiliza en las pruebas.
+Se definen algunas constantes que permiten establecer los parámetros de las pruebas:
 
-### Parte 1: uso de mmap como arreglo de bytes (`demo_basico`)
+1. `PAGE = mmap.PAGESIZE`: tamaño de página del sistema (normalmente 4096 bytes).
+2. `BLOCK = 4096`: tamaño de cada lectura aleatoria, equivalente a 4 KB.
+3. `SEQ_CHUNK = 64 * 1024`: tamaño de cada bloque en la lectura secuencial.
+4. `N_RANDOM = 20_000`: cantidad de lecturas que se realizan en las pruebas de acceso aleatorio.
+5. `SEED = 42`: semilla para generar siempre las mismas posiciones.
+
+El tamaño del archivo grande es de 512 MB por defecto.
+
+### Uso de mmap como arreglo de bytes (`mmap_como_arreglo`)
 
 En esta primera parte se muestra cómo utilizar `mmap` para acceder al contenido de un archivo como si fuera un arreglo de bytes.
 
-1. Primero, se crea un archivo pequeño que contiene una frase almacenada en formato binario (`"wb"`).
+1. Primero, se crea un archivo temporal que contiene una frase almacenada en formato binario (`"wb"`), rellenada con ceros hasta completar una página.
 2. Después, se abre en modo `"r+b"`, que permite realizar operaciones de lectura y escritura.
 3. Se crea el mapeo mediante `mmap.mmap(f.fileno(), 0)`, donde:
    - `f.fileno()` obtiene el descriptor del archivo abierto.
    - El valor `0` indica que se debe mapear el archivo completo.
 4. Una vez creado el mapeo, se realizan algunas operaciones para observar cómo se puede manipular el contenido:
-   - `len(mm)` permite conocer el tamaño del archivo.
+   - `len(mm)` permite conocer el tamaño del mapeo.
+   - `mm[:31]` devuelve los primeros bytes del contenido.
    - `mm[0]` devuelve el primer byte como un número entero.
-   - `mm[0:4]` permite obtener una parte del contenido.
-   - `mm.find(b"mundo")` busca una palabra directamente dentro del archivo.
+   
 5. Posteriormente, se modifica una parte del contenido mediante `mm[0:4] = b"HOLA"`, mostrando que es posible escribir directamente sobre la región mapeada.
-6. Se utiliza `mm.flush()` para solicitar que los cambios se reflejen en el archivo y `mm.close()` para liberar el mapeo.
+6. Se utiliza `mm.flush()` para solicitar que los cambios se reflejen en el archivo, y el mapeo se cierra al salir del bloque `with`.
 7. Finalmente, se vuelve a abrir el archivo utilizando `read()` para comprobar que la modificación se guardó correctamente. Una vez terminada la prueba, el archivo se elimina.
 
 ### Creación del archivo grande (`crear_archivo`)
 
-Para realizar las pruebas de rendimiento, se genera un archivo de texto de 256 MB con contenido ASCII.
+Para realizar las pruebas de rendimiento, se genera un archivo grande con contenido aleatorio.
 
-1. El archivo se construye mediante líneas de exactamente 64 bytes.
-2. Cada línea contiene un texto con un número consecutivo, seguido de una frase descriptiva. Se utiliza `ljust(63)` para completar el contenido con espacios y se agrega un salto de línea, obteniendo así los 64 bytes.
-3. La cantidad de líneas se calcula dividiendo el tamaño total del archivo entre 64:
-   `TAM_MB * 1024 * 1024 // 64`.
-4. Al escribir el archivo se utiliza `newline="\n"` para mantener los saltos de línea con un solo byte, evitando que Windows los convierta y altere el tamaño esperado.
-5. Se utiliza codificación ASCII para asegurar que cada carácter ocupe un byte. Esto permite calcular las posiciones dentro del archivo de manera sencilla y precisa.
+1. Se genera un bloque de 1 MB con datos aleatorios mediante `os.urandom`, para que el archivo no esté vacío ni pueda ser disperso (sparse).
+2. Ese bloque se escribe repetidamente hasta alcanzar el tamaño del archivo (512 MB por defecto).
+3. Al terminar se utilizan `flush()` y `os.fsync()` para asegurar que el contenido quedó en disco antes de medir.
 
-### Acceso directo al archivo (`acceso_directo`)
+### Información del archivo y page faults (`page_faults`)
 
-Esta función permite mostrar cómo `mmap` facilita el acceso a una posición específica del archivo sin necesidad de recorrer previamente su contenido.
+Esta función permite observar qué hace el sistema operativo al mapear un archivo.
 
-Como cada línea ocupa 64 bytes, la posición inicial de la línea `k` se obtiene multiplicando su número por 64 (`k * 64`).
+1. Imprime el inodo, el tamaño, el tamaño de bloque del sistema de archivos, los bloques asignados, el tamaño de página y la cantidad de páginas del archivo.
+2. Vacía la caché del archivo y registra los fallos de página antes del mapeo.
+3. Crea el mapeo con `ACCESS_READ` y vuelve a medir los fallos: esta cifra muestra el costo de reservar las direcciones, sin haber leído datos.
+4. Toca 1000 páginas distintas (un byte por página) y mide los fallos que se generaron.
+5. Vuelve a leer esas mismas 1000 páginas y mide los fallos: al estar ya mapeadas, no deberían aparecer fallos nuevos.
 
-Por ejemplo, para acceder a la línea 1,000,000, se utiliza una rebanada del mapeo:
-
-`mm[k * 64:(k + 1) * 64]`
-
-De esta manera, se obtiene directamente el contenido de esa línea, sin tener que leer todas las anteriores. Esto permite observar una de las principales ventajas de `mmap`: acceder a distintas partes de un archivo mediante sus posiciones en memoria.
-
-### Parte 2: comparación entre mmap y read() (`benchmark`)
+### Comparación entre mmap y read() (`benchmark`)
 
 En esta segunda parte se realizan pruebas para comparar el rendimiento de `mmap` y `read()` al leer archivos de manera secuencial y aleatoria.
 
 Se implementan cuatro funciones:
 
-1. `secuencial_read`: lee el archivo desde el principio hasta el final, utilizando `f.read(BLOQUE)` dentro de un ciclo.
-2. `secuencial_mmap`: recorre el archivo mapeado y obtiene bloques consecutivos mediante rebanadas (`mm[i:i + BLOQUE]`).
-3. `aleatorio_read`: utiliza `f.seek(pos)` para desplazarse a una posición específica y después lee un bloque de 4 KB con `f.read(BLOQUE)`.
-4. `aleatorio_mmap`: accede directamente a las posiciones indicadas mediante rebanadas del mapeo (`mm[pos:pos + BLOQUE]`).
+1. `seq_read`: lee el archivo desde el principio hasta el final, utilizando `f.read(SEQ_CHUNK)` dentro de un ciclo, sin búfer de Python.
+2. `seq_mmap`: recorre el archivo mapeado y obtiene bloques consecutivos mediante rebanadas (`mm[i:i + SEQ_CHUNK]`), usando `MADV_SEQUENTIAL`.
+3. `rand_read`: utiliza `os.pread(fd, BLOCK, pos)` para leer un bloque de 4 KB en una posición específica con una sola llamada al sistema.
+4. `rand_mmap`: accede directamente a las posiciones indicadas mediante rebanadas del mapeo (`mm[pos:pos + BLOCK]`), usando `MADV_RANDOM`.
 
 Para las pruebas con `mmap` se utiliza `access=mmap.ACCESS_READ`, ya que en esta parte únicamente se necesita consultar el contenido del archivo.
+
+Cada función calcula un `zlib.crc32` de los datos leídos. Esto asegura que los bytes realmente se acceden y permite comprobar que `read()` y `mmap` leyeron exactamente lo mismo.
 
 **Condiciones para realizar una comparación justa**
 
 Para que los resultados sean comparables, se consideran las siguientes condiciones:
 
-1. Ambos métodos trabajan con bloques del mismo tamaño, es decir, 4 KB.
-2. Las posiciones de las lecturas aleatorias se generan una sola vez utilizando `random.seed(42)`. Además, se seleccionan posiciones que sean múltiplos de 4096 mediante `random.randrange(n_bloques) * BLOQUE`.
+1. Ambos métodos trabajan con bloques del mismo tamaño: 64 KB en la lectura secuencial y 4 KB en la aleatoria.
+2. Las posiciones de las lecturas aleatorias se generan una sola vez utilizando `random.Random(42)`. Además, se seleccionan posiciones que sean múltiplos de 4096.
 3. De esta forma, tanto `read()` como `mmap` acceden exactamente a las mismas posiciones del archivo.
-4. En cada operación, el bloque leído se asigna a una variable para que se realice el acceso a los datos.
+4. En cada operación se calcula el checksum del bloque leído, para que se realice el acceso a los datos.
 
 **Medición de tiempos y efecto de la caché**
 
-Para medir el rendimiento se utiliza la función `medir()`, que calcula el tiempo de ejecución de cada prueba mediante `time.perf_counter()`.
+Para medir el rendimiento se utiliza la función `medir()`, que calcula el tiempo de ejecución de cada prueba mediante `time.perf_counter()` y registra los fallos de página menores y mayores ocurridos durante ella.
 
-Cada prueba se ejecuta tres veces y los resultados se muestran en una tabla, donde cada fila representa una prueba y las columnas indican el tiempo obtenido en cada repetición.
+Para controlar el efecto de la caché del sistema operativo, cada prueba se ejecuta en dos condiciones:
 
-Esta repetición también permite observar el efecto de la caché del sistema operativo. La primera ejecución puede tardar más porque algunos datos todavía no se encuentran en memoria, mientras que las siguientes pueden aprovechar los bloques que ya están almacenados en la caché.
+1. **Caché fría:** antes de cada medición se saca el archivo de la caché de páginas con `os.posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)`. Así la lectura viene realmente del disco y aparecen fallos mayores.
+2. **Caché caliente:** antes de medir se lee el archivo completo una vez, de modo que quede en RAM. Así se mide el costo del mecanismo sin la influencia del disco.
 
-Al finalizar todas las pruebas, se elimina el archivo grande para liberar el espacio utilizado.
+Los resultados se muestran en cuatro tablas (secuencial y aleatorio, cada uno con caché fría y caliente), donde cada fila representa un método y las columnas indican el tiempo, los fallos menores y los fallos mayores.
 
+Al finalizar todas las pruebas, se elimina el archivo grande para liberar el espacio utilizado
 
 ## Analisis de resultados
 
@@ -213,52 +220,57 @@ Al finalizar todas las pruebas, se elimina el archivo grande para liberar el esp
 ### Arranque
 
 1. Python lee las constantes y define todas las funciones. Todavía no ejecuta nada.
-2. Llega a la última línea, `if __name__ == "__main__": main()`, y llama a `main()`.
-3. `main()` ejecuta primero `demo_basico()` y después `benchmark()`.
+2. Llega a la última línea de `main.py`, `if __name__ == "__main__": main()`, y llama a `main()`.
+3. `main()` lee las opciones, define el tamaño y la ruta del archivo de prueba, y ejecuta las partes en orden.
 
-### Parte 1: `demo_basico()`
+### Parte 1: `mmap_como_arreglo()`
 
-1. **Crear el archivo pequeño.** Se escribe `pequeno.txt` con la frase "Hola mundo desde un archivo mapeado a memoria".
+1. **Crear el archivo pequeño.** Se escribe un archivo temporal con la frase "Hola, mundo mapeado en memoria!" rellenada con ceros hasta una página.
 2. **Abrirlo con mmap.** Se abre en modo lectura y escritura, y se mapea completo (`mmap.mmap(f.fileno(), 0)`). Desde aquí el archivo se usa como una lista de bytes.
 3. **Consultarlo.** Se imprime:
-   - el tamaño (45 bytes);
-   - el primer byte (`mm[0]`, un número);
-   - las primeras 4 posiciones (`mm[0:4]`, es decir `Hola`);
-   - la posición de la palabra "mundo" (`mm.find`).
+   - el tamaño del mapeo (4096 bytes);
+   - los primeros bytes (`mm[:31]`);
+   - el primer byte (`mm[0]`, un número).
 4. **Modificarlo.** Se escribe `mm[0:4] = b"HOLA"`, y la frase pasa de "Hola" a "HOLA" directo en memoria.
-5. **Guardar y cerrar.** `mm.flush()` manda el cambio al disco y `mm.close()` cierra el mapeo.
-6. **Comprobar.** Se abre el archivo de la forma normal con `read()` y se imprime. Debe verse "HOLA mundo...", lo que demuestra que el cambio sí quedó en el archivo.
-7. **Limpiar.** Se borra `pequeno.txt`.
+5. **Guardar y cerrar.** `mm.flush()` manda el cambio al disco y el mapeo se cierra al salir del `with`.
+6. **Comprobar.** Se abre el archivo de la forma normal con `read()` y se imprime. Debe verse "HOLA, mundo...", lo que demuestra que el cambio sí quedó en el archivo.
+7. **Limpiar.** Se borra el archivo temporal.
 
-### Parte 2: `benchmark()`
+### Parte 2: creación del archivo y `page_faults()`
+
+1. **Crear el archivo grande** (`crear_archivo()`):
+   - Se genera un bloque de 1 MB con datos aleatorios.
+   - Se escribe repetidamente hasta llegar a 512 MB y se sincroniza a disco.
+   - Es el paso que más tarda, porque escribe todo el archivo.
+2. **Mostrar el mapeo y los fallos** (`page_faults()`):
+   - Se imprime el inodo, los bloques y las páginas del archivo.
+   - Se vacía la caché y se mapea el archivo: aquí casi no hay fallos, porque solo se reservan direcciones.
+   - Se tocan 1000 páginas y se cuentan los fallos.
+   - Se vuelven a leer esas páginas y ya no aparecen fallos nuevos.
+
+### Parte 3: `benchmark()`
 
 **Preparación**
 
-1. **Crear el archivo grande** (`crear_archivo()`):
-   - Se calcula cuántas líneas hacen falta para llegar a 256 MB.
-   - Se escribe cada línea ("Linea 000000000...", "Linea 000000001...") rellenada hasta medir 64 caracteres.
-   - Es el paso que más tarda, porque escribe 256 MB.
-2. **Saltar a una línea** (`acceso_directo()`):
-   - Se abre el archivo grande con mmap.
-   - Se calcula dónde empieza la línea 1,000,000 (1,000,000 × 64).
-   - Se imprime esa línea sin haber leído las anteriores.
-3. **Elegir lugares al azar.**
-   - Se eligen 50,000 posiciones aleatorias, todas múltiplos de 4096.
+1. **Elegir lugares al azar.**
+   - Se eligen 20,000 posiciones aleatorias, todas múltiplos de 4096.
    - La lista se arma una sola vez. Así los dos métodos leen exactamente los mismos lugares.
 
 **Las pruebas**
 
-Cada prueba se hace con `medir()`, que anota la hora antes y después, y se repite 3 veces. En cada repetición pasa lo siguiente:
+Cada prueba se hace con `medir()`, que anota la hora antes y después, y los fallos de página. Primero se ejecutan con caché fría y después con caché caliente:
 
-1. **Lectura secuencial normal.** Se abre el archivo y se leen pedazos de 4 KB hasta llegar al final.
-2. **Lectura secuencial con mmap.** Se mapea el archivo y se toman pedazos de 4 KB uno tras otro hasta el final.
-3. **Lectura aleatoria normal.** Para cada una de las 50,000 posiciones se salta ahí y se lee un pedazo.
-4. **Lectura aleatoria con mmap.** Para cada una de las 50,000 posiciones se toma directamente el pedazo del archivo mapeado.
+1. **Lectura secuencial normal.** Se abre el archivo y se leen pedazos de 64 KB hasta llegar al final.
+2. **Lectura secuencial con mmap.** Se mapea el archivo y se toman pedazos de 64 KB uno tras otro hasta el final.
+3. **Lectura aleatoria normal.** Para cada una de las 20,000 posiciones se lee un pedazo de 4 KB con `pread()`.
+4. **Lectura aleatoria con mmap.** Para cada una de las 20,000 posiciones se toma directamente el pedazo del archivo mapeado.
+
+En la caché fría, el archivo se saca de la caché antes de cada medición. En la caché caliente, el archivo se lee completo una vez antes de medir.
 
 **Resultados**
 
-1. Se imprime una tabla con una fila por prueba y tres tiempos (1ª, 2ª y 3ª vez), en segundos.
-2. La 1ª vez puede ser más lenta porque el sistema operativo aún no tiene el archivo en su memoria rápida (la caché). Las siguientes suelen ser más rápidas.
+1. Se imprime una tabla por escenario, con una fila por método y las columnas de tiempo, fallos menores y fallos mayores.
+2. Con caché fría aparecen fallos mayores, porque los datos se leen del disco. Con caché caliente solo aparecen fallos menores.
 3. Se borra el archivo grande.
 
 
