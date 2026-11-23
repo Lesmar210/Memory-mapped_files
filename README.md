@@ -2,7 +2,7 @@
 ## Integrantes
 - 323270258 - Aguilar Sánchez Carla Alexandra 
 - 323214478 - Ramriez Olvera Erick Yael
-- N.Cuenta - Nombre
+- 426059112 - Santiago Carreto Héctor
 - 323274177 - Zacarias Guadalupe Leslie Marlene
   
 ## Objetivo  
@@ -215,6 +215,137 @@ Al finalizar todas las pruebas, se elimina el archivo grande para liberar el esp
 
 ## Analisis de resultados
 
+Para ejecutar el proyecto se utilizó Python 3.14.4 a través de WSL con la distribución Ubuntu. Se consideró mejor opción para poder observar correctamente la interacción del programa con el sistema operativo.
+
+Ejecutando main se obtiene: 
+
+```
+=== mmap como arreglo de bytes ===
+Tamano del mapeo : 4096 bytes
+Primeros bytes   : b'Hola, mundo mapeado en memoria!'
+Byte 0           : 72
+Releido con read(): b'HOLA, mundo mapeado en memoria!'
+Creando /tmp/demo_mmap.bin (512 MiB)...
+
+=== Mapeo y page faults ===
+Inodo               : 27
+Tamano              : 536870912 bytes
+Tamano de bloque FS : 4096 bytes
+Bloques asignados   : 1048576 (de 512 bytes)
+Tamano de pagina SO : 4096 bytes
+Paginas del archivo : 131072
+
+Despues de mmap()        : minor=0, major=0
+Al tocar 1000 paginas     : minor=64, major=0
+Al releer esas 1000       : minor=0, major=0
+
+=== Benchmark mmap vs read() ===
+Pagina del SO: 4096 bytes | lecturas aleatorias: 20000 x 4096 bytes
+
+--- SECUENCIAL - cache fria ---
+metodo                      tiempo (s)   minor flt   major flt
+read() chunks 64 KiB             0.561          32           0
+mmap (MADV_SEQUENTIAL)           0.650         675           1
+
+--- ALEATORIO  - cache fria ---
+metodo                      tiempo (s)   minor flt   major flt
+pread() 4 KiB                   11.686           1           0
+mmap (MADV_RANDOM)              11.051           0       18549
+
+--- SECUENCIAL - cache caliente ---
+metodo                      tiempo (s)   minor flt   major flt
+read() chunks 64 KiB             0.478           0           0
+mmap (MADV_SEQUENTIAL)           0.490        8193           0
+
+--- ALEATORIO  - cache caliente ---
+metodo                      tiempo (s)   minor flt   major flt
+pread() 4 KiB                    0.124           0           0
+mmap (MADV_RANDOM)               0.147        7470           0
+
+Archivo temporal borrado: /tmp/demo_mmap.bin
+```
+
+Importante mencionar que al correr el programa con WSL los accesos a memoria se ralentizan bastante.
+
+### `mmap_como_arreglo()`
+
+```
+Tamano del mapeo : 4096 bytes
+Primeros bytes   : b'Hola, mundo mapeado en memoria!'
+Byte 0           : 72
+Releido con read(): b'HOLA, mundo mapeado en memoria!'
+```
+Primero se muestra el tamaño del mapeo, posteriormente se muestran los primeros bytes del archivo, los cuales se imprimen correctamente, ya que los modificamos antes de esta prueba con:
+```python
+tmp.write(b"Hola, mundo mapeado en memoria!" + b"\x00" * (PAGE - 31))
+```
+Se continúa mostrando el primer byte como un número entero:
+```
+Carácter	Byte(Binario)	Decimal(ASCII)
+   H	      01001000	         72
+```
+Finalmente, se muestran los primeros 31 bytes después del cambio para comprobar que se guardaron dichos cambios.
+
+### `crear_archivo`
+Esta función crea el archivo grande para las pruebas de eficiencia y solo muestra ```Creando /tmp/demo_mmap.bin (512 MiB)...```
+
+### `page_faults`
+```
+Inodo               : 27
+Tamano              : 536870912 bytes
+Tamano de bloque FS : 4096 bytes
+Bloques asignados   : 1048576 (de 512 bytes)
+Tamano de pagina SO : 4096 bytes
+Paginas del archivo : 131072
+
+Despues de mmap()        : minor=0, major=0
+Al tocar 1000 paginas     : minor=64, major=0
+Al releer esas 1000       : minor=0, major=0
+```
+Primero de imprimen los datos de la prueba y después se muestran los errores de página que ocurren tras cada paso
+
+### `benchmark`
+
+```
+Pagina del SO: 4096 bytes | lecturas aleatorias: 20000 x 4096 bytes
+
+--- SECUENCIAL - cache fria ---
+metodo                      tiempo (s)   minor flt   major flt
+read() chunks 64 KiB             0.561          32           0
+mmap (MADV_SEQUENTIAL)           0.650         675           1
+
+--- ALEATORIO  - cache fria ---
+metodo                      tiempo (s)   minor flt   major flt
+pread() 4 KiB                   11.686           1           0
+mmap (MADV_RANDOM)              11.051           0       18549
+
+--- SECUENCIAL - cache caliente ---
+metodo                      tiempo (s)   minor flt   major flt
+read() chunks 64 KiB             0.478           0           0
+mmap (MADV_SEQUENTIAL)           0.490        8193           0
+
+--- ALEATORIO  - cache caliente ---
+metodo                      tiempo (s)   minor flt   major flt
+pread() 4 KiB                    0.124           0           0
+mmap (MADV_RANDOM)               0.147        7470           0
+```
+Primero se muestran los datos de la prueba y luego se muestran los resultados:
+
+1. Secuencial, fría:	mmap 15.9% más lento	read() tuvo ventaja
+2. Secuencial, caliente:	mmap 2.5% más lento	Rendimiento prácticamente similar
+3. Aleatorio, frío:	mmap 5.4% más rápido	Ventaja pequeña de mmap
+4. Aleatorio, caliente:	mmap 18.5% más lento	pread() tuvo ventaja
+
+- Secuencial: En este tipo de acceso observamos la ligera ventaja de read() frente a mmap que se esperaba, siendo aproximadamente 15% más rápido en caché fría.
+
+Esto cambia en caché caliente, los tiempos de ejecución se estabilizan y no ocurre ningun error de página mayor, pero ocurren más errores menores.
+Esto ocurre porque read() copia la información del archivo a RAM usando llamadas al kernel y solo trabaja con el buffer. mmap mapea los espacios de memoria y copia la información a RAM, pero accesos a paginas aún no mapeadas provocan un error menor.
+
+- Aleatorio: En caché fría pread() lee segmentos aleatorios del archivo utilizando directamente llamadas al kernel, asi saltandose el mapeo en memoria virtual. Esto hace que el registro muestre 0 errores mayores (Accesos a almacenamiento), pero aún asi pausa el proceso.
+mmap accede los puntos aleatorios de memoria e intenta mapearlos, los busca en RAM y luego en almacenamiento, por esto provoca tantos errores mayores.
+
+En caché caliente la mayoría o todos los datos ya esyan copiados a RAM por lo que la ejecución es mucho más rápida: pread se ejecuta sin ningun problema pero mmap tiene muchos errores menores por la misma razón que antes, muchos de los accesos requeridos aún no han sido mapeados, lo que provoca errores menores. Este proceso causa que mmap sea ligeramente más lento que pread(), pero en posteriores ejecuciones donde los accesos sean en paginas ya mapeadas mmap sería más rápido (solo si se mantiene el mismo mapeo).
+
 ## Paso a paso
 
 ### Arranque
@@ -275,6 +406,12 @@ En la caché fría, el archivo se saca de la caché antes de cada medición. En 
 
 
 ## Conclusiones
+
+A través de este proyecto se comprobó el funcionamiento de los archivos mapeados en memoria (mmap), observando cómo el sistema operativo relaciona un archivo con el espacio de direcciones virtuales de un proceso. Se verificó que crear un mapeo no implica cargar inmediatamente todo el archivo a RAM, sino que las páginas se van haciendo accesibles conforme el programa las utiliza. Esto permite trabajar con archivos grandes sin necesidad de cargarlos completamente de manera explícita.
+
+Finalmente, se concluye que mmap no es necesariamente más rápido que read() en todos los escenarios. Su principal ventaja se encuentra en la flexibilidad de acceder al archivo como una región de memoria y su utilidad en accesos repetidos.
+
+En cambio, read() y pread() pueden ser muy eficientes para lecturas secuenciales o aleatorias cuando se utilizan adecuadamente y los datos están disponibles en la caché. La elección del método debe considerar el patrón de acceso, el tamaño del archivo y el estado de la caché.
 
 ## Referencias
 - Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). Operating System Concepts (10th ed.). Wiley. (Capítulo sobre gestión de memoria virtual y mapeo de archivos).
