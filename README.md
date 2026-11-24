@@ -1,4 +1,5 @@
 # Memory-mapped_files
+https://canva.link/6ufmlj634mstmxi
 ## Integrantes
 - 323270258 - Aguilar Sánchez Carla Alexandra 
 - 323214478 - Ramriez Olvera Erick Yael
