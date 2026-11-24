@@ -341,7 +341,7 @@ Primero se muestran los datos de la prueba y luego se muestran los resultados:
 Esto cambia en caché caliente, los tiempos de ejecución se estabilizan y no ocurre ningun error de página mayor, pero ocurren más errores menores.
 Esto ocurre porque read() copia la información del archivo a RAM usando llamadas al kernel y solo trabaja con el buffer. mmap mapea los espacios de memoria y copia la información a RAM, pero accesos a paginas aún no mapeadas provocan un error menor.
 
-- Aleatorio: En caché fría pread() lee segmentos aleatorios del archivo utilizando directamente llamadas al kernel, asi saltandose el mapeo en memoria virtual. Esto hace que el registro muestre 0 errores mayores (Accesos a almacenamiento), pero aún asi pausa el proceso.
+- Aleatorio: En caché fría pread() lee segmentos aleatorios del archivo utilizando directamente llamadas al kernel, asi saltandose el mapeo en memoria virtual. Esto hace que el registro muestre 0 errores mayores, pero aún asi accede el almacenamiento.
 mmap accede los puntos aleatorios de memoria e intenta mapearlos, los busca en RAM y luego en almacenamiento, por esto provoca tantos errores mayores.
 
 En caché caliente la mayoría o todos los datos ya esyan copiados a RAM por lo que la ejecución es mucho más rápida: pread se ejecuta sin ningun problema pero mmap tiene muchos errores menores por la misma razón que antes, muchos de los accesos requeridos aún no han sido mapeados, lo que provoca errores menores. Este proceso causa que mmap sea ligeramente más lento que pread(), pero en posteriores ejecuciones donde los accesos sean en paginas ya mapeadas mmap sería más rápido (solo si se mantiene el mismo mapeo).
